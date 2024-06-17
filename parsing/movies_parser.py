@@ -9,9 +9,9 @@ spark = (
 )
 
 
-movies = load_csv_data_from(path="data/ml-latest-small/movies.csv", session=spark)
-
-movies.show()
+movies_bronze = load_csv_data_from(
+    path="data/ml-latest-small/movies.csv", session=spark
+)
 
 """
     Columns produced:
@@ -19,8 +19,8 @@ movies.show()
         2. title_clean = Movie title without the year information
         3. genre_list = Split the genres on character "|" and store as a list
 """
-movies_with_year = (
-    movies.withColumn("year", F.regexp_extract("title", "(\d{4})", 1))
+movies_silver = (
+    movies_bronze.withColumn("year", F.regexp_extract("title", "(\d{4})", 1))
     .withColumn("title_clean", F.regexp_replace("title", "\(\d{4}\)", ""))
     .withColumn("genre_list", F.split("genres", "\|"))
 )
@@ -32,16 +32,28 @@ movies_with_year = (
     3. Generate ID column and assign to each of the unique genres
 """
 genres = (
-    movies_with_year.select(F.explode("genre_list"))
+    movies_silver.select(F.explode("genre_list"))
     .distinct()
     .withColumn("id", F.monotonically_increasing_id())
+    .withColumnRenamed("col", "genre")
 )
 
-genres_map = F.create_map([F.lit(x) for x in genres.foreach()])
+genres_array = genres.collect()
 
-print(genres_map)
+broadcasted_genres = spark.sparkContext.broadcast(genres_array)
+genres_map = F.create_map([F.lit(x) for i in broadcasted_genres.value for x in i])
 
+movies_gold = (
+    movies_silver.withColumn(
+        "transformed_genres", F.transform("genre_list", lambda x: genres_map[x])
+    )
+    .select("title_clean", "year", "transformed_genres")
+    .withColumnRenamed("title_clean", "movie_title")
+    .withColumnRenamed("transformed_genres", "genre")
+)
 
-# genres.write.mode("overwrite").parquet("output/genres.parquet")
+movies_gold.show()
+genres.show()
 
-# genres_With_ID.show(1000, False)
+movies_gold.write.mode("overwrite").partitionBy("year").parquet("output/movies.parquet")
+genres.write.mode("overwrite").partitionBy("genre").parquet("output/genres.parquet")
