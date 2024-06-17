@@ -38,11 +38,21 @@ genres = (
     .withColumnRenamed("col", "genre")
 )
 
-genres_array = genres.collect()
 
+"""
+    1. Collect the genres with ID pairs as an a local array to the driver node.
+    2. broadcast the array to each executor so that it is available locally.
+    3. create a map of ID -> GENRE to be able to transform the values.
+"""
+genres_array = genres.collect()
 broadcasted_genres = spark.sparkContext.broadcast(genres_array)
 genres_map = F.create_map([F.lit(x) for i in broadcasted_genres.value for x in i])
 
+"""
+    1. Add new column with the values transformed using the map above. Replace each value with the corresponding ID
+    2. Select only needed columns.
+    3. Rename columns
+"""
 movies_gold = (
     movies_silver.withColumn(
         "transformed_genres", F.transform("genre_list", lambda x: genres_map[x])
@@ -52,8 +62,8 @@ movies_gold = (
     .withColumnRenamed("transformed_genres", "genre")
 )
 
-movies_gold.show()
-genres.show()
-
+"""
+    Write partitioned parquet files
+"""
 movies_gold.write.mode("overwrite").partitionBy("year").parquet("output/movies.parquet")
 genres.write.mode("overwrite").partitionBy("genre").parquet("output/genres.parquet")
